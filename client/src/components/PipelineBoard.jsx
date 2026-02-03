@@ -20,13 +20,15 @@ import { ClientsView } from './ClientsView';
 import { SettingsView } from './SettingsView';
 import { PublicationsView } from './PublicationsView'; // Imported
 
+import { DashboardView } from './DashboardView';
+
 export default function PipelineBoard({ user, onLogout }) {
     const [stages, setStages] = useState([]);
     const [deals, setDeals] = useState([]);
     const [activeId, setActiveId] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingDeal, setEditingDeal] = useState(null);
-    const [currentView, setCurrentView] = useState('pipeline'); // 'pipeline', 'clients', 'publications', 'settings'
+    const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'pipeline', 'clients', 'publications', 'settings'
 
     const sensors = useSensors(
         useSensor(MouseSensor, {
@@ -59,10 +61,14 @@ export default function PipelineBoard({ user, onLogout }) {
                     }
                 })
             ]);
-            setStages(stagesRes.data.data);
-            setDeals(dealsRes.data.data);
+            console.log("Stages loaded:", stagesRes.data.data);
+            console.log("Deals loaded:", dealsRes.data.data);
+            setStages(stagesRes.data.data || []);
+            setDeals(dealsRes.data.data || []);
         } catch (error) {
             console.error("Failed to fetch data", error);
+            setStages([]);
+            setDeals([]);
         }
     };
 
@@ -142,11 +148,10 @@ export default function PipelineBoard({ user, onLogout }) {
                         </div>
                     </div>
                     <nav className="ml-8 hidden md:flex items-center gap-6 text-sm font-medium text-muted-foreground">
-                        <button onClick={() => setCurrentView('pipeline')} className={currentView === 'pipeline' ? "text-foreground" : "hover:text-foreground"}>Pipeline</button>
+                        <button onClick={() => setCurrentView('dashboard')} className={currentView === 'dashboard' ? "text-foreground" : "hover:text-foreground"}>Visão Geral</button>
+                        <button onClick={() => setCurrentView('pipeline')} className={currentView === 'pipeline' ? "text-foreground" : "hover:text-foreground"}>Processos</button>
                         <button onClick={() => setCurrentView('clients')} className={currentView === 'clients' ? "text-foreground" : "hover:text-foreground"}>Clientes</button>
                         <button onClick={() => setCurrentView('publications')} className={currentView === 'publications' ? "text-foreground" : "hover:text-foreground"}>Publicações</button>
-                        <button className="hover:text-foreground">Tarefas</button>
-                        <button className="hover:text-foreground">Relatórios</button>
                     </nav>
                 </div>
                 <div className="flex items-center gap-3">
@@ -178,7 +183,9 @@ export default function PipelineBoard({ user, onLogout }) {
             </header>
 
             {/* Main Content */}
-            {currentView === 'pipeline' ? (
+            {currentView === 'dashboard' ? (
+                <DashboardView />
+            ) : currentView === 'pipeline' ? (
                 <main className="flex-1 overflow-x-auto overflow-y-hidden p-6">
                     <div className="flex items-center justify-between mb-6">
                         <h2 className="text-2xl font-bold">Pipeline de Processos</h2>
@@ -198,7 +205,7 @@ export default function PipelineBoard({ user, onLogout }) {
                         onDragEnd={onDragEnd}
                     >
                         <div className="flex h-[calc(100%-4rem)] pb-4">
-                            {stages.map((stage) => (
+                            {(stages || []).map((stage) => (
                                 <Column
                                     key={stage.id}
                                     stage={stage}

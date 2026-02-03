@@ -3,7 +3,7 @@ import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { DealCard } from './DealCard';
 
-export function Column({ stage, deals, onDealClick }) {
+export function Column({ stage, deals = [], onDealClick }) {
     const { setNodeRef } = useDroppable({
         id: stage.id,
     });

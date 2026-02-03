@@ -12,6 +12,49 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Dashboard Stats
+app.get('/api/dashboard/stats', (req, res) => {
+    const stats = {};
+
+    // Use Promise.all for parallel queries
+    const q1 = new Promise((resolve, reject) => {
+        db.get("SELECT COUNT(*) as count FROM clients", (err, row) => {
+            if (err) reject(err); else resolve({ type: 'clients', val: row.count });
+        });
+    });
+
+    const q2 = new Promise((resolve, reject) => {
+        db.get("SELECT COUNT(*) as count, SUM(value) as total_value FROM deals", (err, row) => {
+            if (err) reject(err); else resolve({ type: 'deals', val: row.count, total_value: row.total_value });
+        });
+    });
+
+    const q3 = new Promise((resolve, reject) => {
+        db.get("SELECT COUNT(*) as count FROM publications WHERE status = 'new'", (err, row) => {
+            if (err) reject(err); else resolve({ type: 'publications', val: row.count });
+        });
+    });
+
+    const q4 = new Promise((resolve, reject) => {
+        db.all("SELECT s.name, COUNT(d.id) as count FROM stages s LEFT JOIN deals d ON s.id = d.stage_id GROUP BY s.id", (err, rows) => {
+            if (err) reject(err); else resolve({ type: 'stages', val: rows });
+        });
+    });
+
+    Promise.all([q1, q2, q3, q4]).then(results => {
+        const data = {};
+        results.forEach(r => {
+            if (r.type === 'clients') data.totalClients = r.val;
+            if (r.type === 'deals') { data.totalDeals = r.val; data.totalValue = r.total_value || 0; }
+            if (r.type === 'publications') data.pendingPublications = r.val;
+            if (r.type === 'stages') data.dealsPerStage = r.val;
+        });
+        res.json({ data });
+    }).catch(err => {
+        res.status(500).json({ error: err.message });
+    });
+});
+
 // API Routes
 
 // Get all deals with their stage info
@@ -1067,6 +1110,16 @@ app.delete('/api/documents/:id', (req, res) => {
 // Serve Frontend (Production/Integrated Mode)
 app.use(express.static(path.join(__dirname, '../client/dist')));
 
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+});
+
+// --- Production Setup ---
+// Serve static files from React app
+app.use(express.static(path.join(__dirname, '../client/dist')));
+
+// The "catchall" handler: for any request that doesn't
+// match one above, send back React's index.html file.
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../client/dist/index.html'));
 });

@@ -63,19 +63,46 @@ export function DealCard({ deal, onClick }) {
                 </div>
             </div>
 
+            {/* Deadline & Status Flags */}
             <div className="flex flex-wrap gap-2 mt-3 items-center">
                 {/* Priority Badge */}
                 <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${getPriorityColor(deal.priority)}`}>
                     {deal.priority || 'Normal'}
                 </span>
 
-                {/* Deadline */}
-                {deal.deadline && (
-                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded">
-                        <Clock size={10} />
-                        {formatDate(deal.deadline)}
-                    </div>
-                )}
+                {/* Deadline Badge */}
+                {deal.deadline && (() => {
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const deadlineDate = new Date(deal.deadline + 'T00:00:00'); // Assume YYYY-MM-DD
+                    const diffTime = deadlineDate - today;
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                    let badgeColor = 'bg-slate-100 text-slate-600 border-slate-200';
+                    let badgeText = 'Em dia';
+
+                    if (diffDays < 0) {
+                        badgeColor = 'bg-red-100 text-red-700 border-red-200 font-bold';
+                        badgeText = 'Vencido';
+                    } else if (diffDays <= 2) {
+                        badgeColor = 'bg-orange-100 text-orange-700 border-orange-200 font-bold';
+                        badgeText = 'Vencendo';
+                    } else if (diffDays <= 5) {
+                        badgeColor = 'bg-yellow-100 text-yellow-700 border-yellow-200';
+                        badgeText = 'Atenção';
+                    } else {
+                        badgeColor = 'bg-green-100 text-green-700 border-green-200';
+                        badgeText = 'Em dia';
+                    }
+
+                    return (
+                        <div className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${badgeColor}`} title={`Vence em ${diffDays} dias`}>
+                            <Clock size={10} />
+                            <span>{formatDate(deal.deadline)}</span>
+                            <span className="ml-1 border-l pl-1 border-current opacity-75">{badgeText}</span>
+                        </div>
+                    );
+                })()}
             </div>
 
             {/* Footer: Responsible & Delegation */}
