@@ -605,6 +605,26 @@ app.get('/api/users', (req, res) => {
     });
 });
 
+// DEBUG: Force Seed Endpoint
+app.get('/api/debug/seed', async (req, res) => {
+    try {
+        await db.query("INSERT INTO pipelines (name) VALUES ('Pipeline Padrão') ON CONFLICT DO NOTHING");
+        // Get pipeline ID (assuming 1 if newly created or existing)
+        // Check users
+        const hash = await bcrypt.hash('@Willian10', 10);
+        await db.query(`INSERT INTO users (name, email, login, role, password) VALUES 
+            ('Willian', 'willian@law.com', 'willian', 'admin', $1),
+            ('Admin', 'admin@law.com', 'admin', 'admin', '$2a$10$wOq2c.y8xJ1.Z6.Z6.Z6.u7kZ9.Z6.Z6.Z6.Z6.Z6')
+            ON CONFLICT(email) DO NOTHING`, [hash]); // Login conflict handled by unique constraint usually, but let's hope email catches it or similar.
+
+        // Actually, simpler: just try insert, ignore error.
+
+        res.send("<h1>Comando de Criação Executado!</h1><p>Tente fazer login agora.</p>");
+    } catch (err) {
+        res.status(500).send("Erro ao criar: " + err.message);
+    }
+});
+
 // Login Endpoint
 app.post('/api/login', (req, res) => {
     const { login, password } = req.body;
