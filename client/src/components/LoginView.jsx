@@ -11,9 +11,36 @@ export function LoginView({ onLogin }) {
         e.preventDefault();
         try {
             const res = await axios.post('/api/login', { login, password });
-            onLogin(res.data.data);
+            // Handle both structure types (legacy vs new) if any, but backend sends { user, token }
+            // The onLogin expects 'user' object or whatever App.jsx expects.
+            // App.jsx expects what? Let's check. 
+            // Wait, looking at Step 874, backend returns { token, user }. 
+            // Step 913: onLogin(res.data.data); 
+            // Backend sends: res.json({ token, user: ... })
+            // Frontend expects: res.data.data?
+            // backend Step 874: `res.json({ token, user: {...} })` (NO 'data' wrapper!)
+            // Wait! The previous code (Step 874 diff base) had `res.json({ message: "success", data: userWithoutPassword })`.
+            // My NEW code has `res.json({ token, user: ... })`.
+            // The frontend is trying to read `res.data.data`.
+            // `res.data` IS the JSON object. So `res.data.data` is UNDEFINED.
+            // onLogin(undefined) -> might fail silently or crash App?
+            // But the generic catch block catches it? 
+            // NO, `onLogin` runs after axios. If `onLogin` crashes, it might be caught?
+            // Actually, if `res.data.data` is undefined, `onLogin` gets undefined.
+
+            // FIX: Match the frontend to the new backend response structure.
+            // Backend sends: { token, user }
+            // Frontend should pass: res.data.user (and store token).
+
+            const userData = res.data.user || res.data.data; // Fallback
+            if (res.data.token) {
+                localStorage.setItem('token', res.data.token);
+            }
+            onLogin(userData);
         } catch (err) {
-            setError('Login ou senha inválidos.');
+            console.error(err);
+            const msg = err.response?.data?.error || err.message || 'Erro ao conectar';
+            setError(msg);
         }
     };
 
