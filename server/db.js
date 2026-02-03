@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const bcrypt = require('bcryptjs');
 
 // Environment check
 const isPostgres = !!process.env.DATABASE_URL;
@@ -190,11 +191,11 @@ function initPg() {
         if (err) console.error("Error initializing PG tables:", err);
         else {
             console.log("PG Tables Verified.");
-            // Seed
+            // Seed Pipelines
             db.query("SELECT count(*) as count FROM pipelines", (err, res) => {
                 if (err) return;
                 if (parseInt(res.rows[0].count) === 0) {
-                    console.log("Seeding PG default data...");
+                    console.log("Seeding PG default pipeline...");
                     db.query("INSERT INTO pipelines (name) VALUES ($1) RETURNING id", ['Pipeline Padrão'], (err, res) => {
                         if (!err) {
                             const pipelineId = res.rows[0].id;
@@ -204,6 +205,20 @@ function initPg() {
                             });
                         }
                     });
+                }
+            });
+
+            // Seed Admin User
+            db.query("SELECT count(*) as count FROM users", (err, res) => {
+                if (err) return;
+                if (parseInt(res.rows[0].count) === 0) {
+                    console.log("Seeding PG default user (willian)...");
+                    // Hash for @Willian10
+                    const hash = bcrypt.hashSync('@Willian10', 10);
+                    db.query(
+                        "INSERT INTO users (name, email, login, password, role) VALUES ($1, $2, $3, $4, $5)",
+                        ['Willian', 'willian@lawfirm.com', 'willian', hash, 'admin']
+                    );
                 }
             });
         }
