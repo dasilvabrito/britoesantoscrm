@@ -1193,6 +1193,7 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    console.log(`Environment: ${isPostgres ? 'Production (PostgreSQL)' : 'Development (SQLite)'}`);
+    const mode = process.env.DATABASE_URL ? 'Production (PostgreSQL)' : 'Development (SQLite)';
+    console.log(`Environment: ${mode}`);
     console.log("Manual restart triggered by user request.");
 });
