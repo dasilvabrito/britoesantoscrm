@@ -15,6 +15,16 @@ class DatabaseAdapter {
             console.log("[DB] Mode: PostgreSQL (Neon Cloud)");
             this.connection = new Pool({
                 connectionString: DATABASE_URL,
+                ssl: {
+                    rejectUnauthorized: false
+                },
+                max: 10,
+                idleTimeoutMillis: 30000,
+                connectionTimeoutMillis: 5000,
+            });
+
+            this.connection.on('error', (err) => {
+                console.error('[DB] Unexpected error on idle client', err);
             });
         } else {
             const dbPath = path.resolve(__dirname, '../database/crm.sqlite');
