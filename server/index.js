@@ -12,6 +12,12 @@ const app = express();
 const PORT = 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'lawfirm_secret_key_2026';
 
+console.log("[STARTUP] Initializing server...");
+console.log("[STARTUP] DATABASE_URL present:", !!process.env.DATABASE_URL);
+if (process.env.DATABASE_URL) {
+    console.log("[STARTUP] DATABASE_URL (preview):", process.env.DATABASE_URL.substring(0, 20) + "...");
+}
+
 app.use(cors());
 app.use(express.json());
 
@@ -699,8 +705,9 @@ app.get('/api/debug/env', (req, res) => {
 
 // DEBUG: Force Seed Endpoint (Updated for Fix)
 app.get('/api/debug/seed', async (req, res) => {
+    console.log("[SEED] GET /api/debug/seed requested");
     try {
-        console.log("[SEED] Starting database sync...");
+        console.log("[SEED] Starting database sync. Postgres Mode:", db.isPostgres);
 
         // 1. Ensure Pipelines/Stages exist (Postgres)
         if (db.isPostgres) {

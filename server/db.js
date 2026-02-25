@@ -1,6 +1,4 @@
-require('dotenv').config();
-const { Pool } = require('pg');
-const sqlite3 = require('sqlite3').verbose();
+const Pool = require('pg').Pool;
 const path = require('path');
 const fs = require('fs');
 
@@ -12,7 +10,7 @@ class DatabaseAdapter {
         this.connection = null;
 
         if (this.isPostgres) {
-            console.log("[DB] Mode: PostgreSQL (Neon Cloud)");
+            console.log("[DB] Mode: PostgreSQL (Neon Cloud detected)");
             this.connection = new Pool({
                 connectionString: DATABASE_URL,
                 ssl: {
@@ -27,6 +25,7 @@ class DatabaseAdapter {
                 console.error('[DB] Unexpected error on idle client', err);
             });
         } else {
+            const sqlite3 = require('sqlite3').verbose();
             const dbPath = path.resolve(__dirname, '../database/crm.sqlite');
             console.log(`[DB] Mode: SQLite (Local). Path: ${dbPath}`);
             const dbDir = path.dirname(dbPath);
