@@ -697,26 +697,47 @@ app.get('/api/debug/env', (req, res) => {
     });
 });
 
-// DEBUG: Force Seed Endpoint
+// DEBUG: Force Seed Endpoint (Updated for Fix)
 app.get('/api/debug/seed', async (req, res) => {
     try {
-        // Use db.raw.query because db (adapter) does not have .query()
-        // And we know we are targeting Postgres here.
-        if (!db.raw.query) {
-            return res.status(500).send("Endpoint available only on Postgres/Production mode.");
+        console.log("[SEED] Starting database sync...");
+
+        // 1. Ensure Pipelines/Stages exist (Postgres)
+        if (db.isPostgres) {
+            await db.connection.query("INSERT INTO pipelines (name) VALUES ('Pipeline Padrão') ON CONFLICT DO NOTHING");
         }
 
-        await db.raw.query("INSERT INTO pipelines (name) VALUES ('Pipeline Padrão') ON CONFLICT DO NOTHING");
+        const newPassword = await bcrypt.hash('220215', 10);
 
-        const hash = await bcrypt.hash('@Willian10', 10);
-        await db.raw.query(`INSERT INTO users (name, email, login, role, password) VALUES 
-            ('Willian', 'willian@law.com', 'willian', 'admin', $1),
-            ('Admin', 'admin@law.com', 'admin', 'admin', '$2a$10$wOq2c.y8J1.Z6.Z6.Z6.u7kZ9.Z6.Z6.Z6.Z6.Z6')
-            ON CONFLICT(email) DO NOTHING`, [hash]);
+        // 2. Create/Update Users
+        const usersToSeed = [
+            { name: 'Wililan', login: 'wililan', email: 'wililan@law.com', role: 'admin' },
+            { name: 'Willian', login: 'willian', email: 'willian@law.com', role: 'admin' },
+            { name: 'Admin', login: 'admin', email: 'admin@law.com', role: 'admin' }
+        ];
 
-        res.send("<h1>Comando de Criação Executado!</h1><p>Tente fazer login agora.</p>");
+        for (const u of usersToSeed) {
+            const sql = db.isPostgres
+                ? `INSERT INTO users (name, login, email, role, password) VALUES ($1, $2, $3, $4, $5) 
+                   ON CONFLICT(login) DO UPDATE SET password = EXCLUDED.password, role = EXCLUDED.role`
+                : `INSERT INTO users (name, login, email, role, password) VALUES (?, ?, ?, ?, ?)`;
+
+            const params = [u.name, u.login, u.email, u.role, newPassword];
+
+            if (db.isPostgres) {
+                await db.connection.query(sql, params);
+            } else {
+                await new Promise((resolve) => {
+                    db.run(sql, params, () => resolve());
+                });
+            }
+        }
+
+        console.log("[SEED] Sync completed successfully.");
+        res.send("<h1>Sincronização Concluída!</h1><p>Os usuários <b>wililan</b> e <b>willian</b> foram atualizados com a senha <b>220215</b>.</p><p><a href='/'>Voltar para o Login</a></p>");
     } catch (err) {
-        res.status(500).send("Erro ao criar: " + err.message);
+        console.error("[SEED] Error:", err);
+        res.status(500).send("Erro ao sincronizar: " + err.message);
     }
 });
 
@@ -738,41 +759,49 @@ app.post('/api/login', (req, res) => {
     }
 
     db.get("SELECT * FROM users WHERE login = ?", [login], async (err, user) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) {
+            console.error("[LOGIN] Database error:", err);
+            return res.status(500).json({ error: "Erro interno do servidor ao buscar usuário." });
+        }
+
         if (!user) {
-            console.log(`Login failed: User '${login}' not found.`);
-            // DEBUG: List available users to diagnose mismatch
-            db.all("SELECT login FROM users", [], (errAll, rows) => {
-                const available = rows ? rows.map(r => r.login).join(', ') : 'Error fetching list';
-                return res.status(401).json({
-                    error: `Usuário '${login}' não encontrado. Disponíveis no banco: [${available}]`
-                });
+            console.log(`[LOGIN] User not found: '${login}'`);
+            return res.status(401).json({
+                error: `Usuário '${login}' não cadastrado.`,
+                code: 'USER_NOT_FOUND'
             });
-            return;
         }
 
-        const validPassword = await bcrypt.compare(password, user.password);
-        console.log(`Login attempt for '${login}'. Match: ${validPassword}`);
+        try {
+            const validPassword = await bcrypt.compare(password, user.password);
+            console.log(`[LOGIN] Attempt for '${login}'. Success: ${validPassword}`);
 
-        if (!validPassword) {
-            return res.status(401).json({ error: "Credenciais inválidas (Senha incorreta)" });
-        }
-
-        const token = jwt.sign(
-            { id: user.id, role: user.role, name: user.name },
-            JWT_SECRET,
-            { expiresIn: '8h' }
-        );
-
-        res.json({
-            token,
-            user: {
-                id: user.id,
-                name: user.name,
-                login: user.login,
-                role: user.role
+            if (!validPassword) {
+                return res.status(401).json({
+                    error: "Senha incorreta.",
+                    code: 'INVALID_PASSWORD'
+                });
             }
-        });
+
+            const token = jwt.sign(
+                { id: user.id, role: user.role, name: user.name },
+                JWT_SECRET,
+                { expiresIn: '8h' }
+            );
+
+            res.json({
+                token,
+                user: {
+                    id: user.id,
+                    name: user.name,
+                    login: user.login,
+                    role: user.role
+                }
+            });
+        } catch (bcryptErr) {
+            console.error("[LOGIN] Bcrypt error:", bcryptErr);
+            res.status(500).json({ error: "Erro ao validar credenciais." });
+        }
     });
 });
 

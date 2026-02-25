@@ -35,6 +35,6 @@ PASSO 4: Testar
 - De outros computadores, digite: http://192.168.1.15
 
 ---
-Login: wililan
-Senha: 123456
+Login: wililan OU willian
+Senha: 220215
 ---
