@@ -1636,9 +1636,13 @@ app.post('/api/zapsign/create', async (req, res) => {
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-    const mode = process.env.DATABASE_URL ? 'Production (PostgreSQL)' : 'Development (SQLite)';
-    console.log(`Environment: ${mode}`);
-    console.log("Manual restart triggered by user request.");
-});
+if (process.env.VERCEL !== '1') {
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Server running on port ${PORT}`);
+        const mode = process.env.DATABASE_URL ? 'Production (PostgreSQL)' : 'Development (SQLite)';
+        console.log(`Environment: ${mode}`);
+        console.log("Manual restart triggered by user request.");
+    });
+}
+
+module.exports = app;

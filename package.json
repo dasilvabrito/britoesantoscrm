@@ -7,6 +7,7 @@
     "install-server": "cd server && npm install",
     "postinstall": "npm run install-client && npm run install-server",
     "build": "cd client && npm run build",
+    "vercel-build": "npm run build && mkdir -p public",
     "start": "cd server && node index.js"
   },
   "engines": {
