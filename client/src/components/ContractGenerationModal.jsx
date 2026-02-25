@@ -62,8 +62,8 @@ export function ContractGenerationModal({ isOpen, onClose, onConfirm, lawyers })
                                         key={lawyer.id}
                                         onClick={() => handleLawyerToggle(lawyer.id)}
                                         className={`p-4 rounded-lg border cursor-pointer transition-all ${selectedLawyerIds.includes(lawyer.id)
-                                                ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                                                : 'border-border hover:border-primary/50 hover:bg-muted/50'
+                                            ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                                            : 'border-border hover:border-primary/50 hover:bg-muted/50'
                                             }`}
                                     >
                                         <div className="flex items-center gap-3">
@@ -119,11 +119,11 @@ export function ContractGenerationModal({ isOpen, onClose, onConfirm, lawyers })
                                 </label>
                                 <input
                                     className="w-full h-10 px-3 rounded-md border border-input bg-background"
-                                    placeholder="Ex: R$ 5.000,00 (cinco mil reais)"
+                                    placeholder="Ex: R$ 5.000,00 (apenas números e vírgula)"
                                     value={contractData.contractValue}
                                     onChange={e => setContractData({ ...contractData, contractValue: e.target.value })}
                                 />
-                                <p className="text-xs text-muted-foreground mt-1">Preenche a tag #VALORDOCONTRATO#</p>
+                                <p className="text-xs text-muted-foreground mt-1">Insira apenas o valor (ex: 5.000,00). O extenso será gerado automaticamente.</p>
                             </div>
                         </div>
                     )}

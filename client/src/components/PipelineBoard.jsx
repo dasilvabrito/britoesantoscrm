@@ -18,7 +18,7 @@ import { EditDealModal } from './EditDealModal';
 
 import { ClientsView } from './ClientsView';
 import { SettingsView } from './SettingsView';
-import { PublicationsView } from './PublicationsView'; // Imported
+import { PendingSignaturesView } from './PendingSignaturesView';
 
 import { DashboardView } from './DashboardView';
 
@@ -28,7 +28,7 @@ export default function PipelineBoard({ user, onLogout }) {
     const [activeId, setActiveId] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingDeal, setEditingDeal] = useState(null);
-    const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'pipeline', 'clients', 'publications', 'settings'
+    const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'pipeline', 'clients', 'signatures', 'settings'
 
     const sensors = useSensors(
         useSensor(MouseSensor, {
@@ -151,7 +151,7 @@ export default function PipelineBoard({ user, onLogout }) {
                         <button onClick={() => setCurrentView('dashboard')} className={currentView === 'dashboard' ? "text-foreground" : "hover:text-foreground"}>Visão Geral</button>
                         <button onClick={() => setCurrentView('pipeline')} className={currentView === 'pipeline' ? "text-foreground" : "hover:text-foreground"}>Processos</button>
                         <button onClick={() => setCurrentView('clients')} className={currentView === 'clients' ? "text-foreground" : "hover:text-foreground"}>Clientes</button>
-                        <button onClick={() => setCurrentView('publications')} className={currentView === 'publications' ? "text-foreground" : "hover:text-foreground"}>Publicações</button>
+                        <button onClick={() => setCurrentView('signatures')} className={currentView === 'signatures' ? "text-foreground" : "hover:text-foreground"}>Assinaturas Pendentes</button>
                     </nav>
                 </div>
                 <div className="flex items-center gap-3">
@@ -237,8 +237,8 @@ export default function PipelineBoard({ user, onLogout }) {
                 </main>
             ) : currentView === 'clients' ? (
                 <ClientsView />
-            ) : currentView === 'publications' ? (
-                <PublicationsView currentUser={user} />
+            ) : currentView === 'signatures' ? (
+                <PendingSignaturesView />
             ) : (
                 <SettingsView />
             )}

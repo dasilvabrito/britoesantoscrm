@@ -52,18 +52,22 @@ export function ClientDocumentsModal({ isOpen, onClose, client }) {
             return;
         }
 
-        // Prepare additional signers
         const additionalSigners = lawyers
             .filter(l => selectedLawyerIds.includes(l.id))
-            .map(l => ({ name: l.name, email: l.login })); // Assuming login is email/username used for auth
+            .map(l => ({
+                name: l.name,
+                email: l.email,
+                phone_number: l.phone
+            }));
 
         setSendingId(docSigning.id);
         try {
             const response = await axios.post(`/api/documents/${docSigning.id}/sign`, {
                 signerEmail: client.email,
                 signerName: client.name,
+                signerPhone: client.phone,
                 additionalSigners: additionalSigners
-            });
+            }, { timeout: 60000 }); // 60s timeout for Puppeteer generation
             alert(`Documento enviado! \nLink: ${response.data.signer_link}`);
             fetchDocuments(); // Refresh to show link
             setDocSigning(null); // Close modal
@@ -180,16 +184,48 @@ export function ClientDocumentsModal({ isOpen, onClose, client }) {
                                             <Printer size={18} />
                                         </button>
 
+
                                         {doc.signer_link ? (
-                                            <a
-                                                href={doc.signer_link}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="p-2 hover:bg-green-600 hover:text-white text-green-600 rounded-md transition-colors flex items-center gap-1"
-                                                title="Link de Assinatura"
-                                            >
-                                                <PenTool size={18} />
-                                            </a>
+                                            <div className="relative group">
+                                                <a
+                                                    href={doc.signer_link}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="p-2 hover:bg-green-600 hover:text-white text-green-600 rounded-md transition-colors flex items-center gap-1"
+                                                    title={doc.signers_data ? "Ver Links de Assinatura" : "Assinar (Cliente)"}
+                                                >
+                                                    <PenTool size={18} />
+                                                </a>
+
+                                                {/* Multi-Signer Dropdown Tooltip */}
+                                                {doc.signers_data && (
+                                                    <div className="absolute right-0 bottom-full mb-2 hidden group-hover:block w-64 bg-white border border-gray-200 shadow-xl rounded-md p-2 z-10 text-xs">
+                                                        <div className="font-bold text-gray-700 mb-2 px-1">Links de Assinatura:</div>
+                                                        <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                                                            {(() => {
+                                                                try {
+                                                                    const signers = JSON.parse(doc.signers_data);
+                                                                    return signers.map((s, idx) => (
+                                                                        <a
+                                                                            key={idx}
+                                                                            href={s.sign_url}
+                                                                            target="_blank"
+                                                                            rel="noreferrer"
+                                                                            className="block p-2 hover:bg-green-50 rounded border border-transparent hover:border-green-100 text-gray-600 hover:text-green-700 truncate"
+                                                                            title={`${s.name} (${s.email})`}
+                                                                        >
+                                                                            <span className="font-semibold block">{s.name}</span>
+                                                                            <span className="text-[10px] opacity-75">{s.email}</span>
+                                                                        </a>
+                                                                    ));
+                                                                } catch (e) {
+                                                                    return <div className="text-red-500">Erro ao carregar assinantes</div>;
+                                                                }
+                                                            })()}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
                                         ) : (
                                             <button
                                                 onClick={() => initiateZapSign(doc)}

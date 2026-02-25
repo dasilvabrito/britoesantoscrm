@@ -5,54 +5,97 @@ const path = require('path');
 const db = require('./db');
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const jwt = require('jsonwebtoken'); // Explicit import validation
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+// FORCE PORT 3000 to avoid Port 80 permission errors
+const PORT = 3001;
+const JWT_SECRET = process.env.JWT_SECRET || 'lawfirm_secret_key_2026';
 
 app.use(cors());
 app.use(express.json());
 
 // Dashboard Stats
-app.get('/api/dashboard/stats', (req, res) => {
+// DEBUG: Direct DB Connection Test
+app.get('/api/debug/db-direct', (req, res) => {
+    console.log("[DEBUG-DB] Opening fresh connection...");
+    const sqlite3 = require('sqlite3').verbose();
+    const dbPath = path.resolve(__dirname, '../database/crm.sqlite');
+
+    const tempDb = new sqlite3.Database(dbPath, (err) => {
+        if (err) {
+            console.error("[DEBUG-DB] Connection Failed:", err);
+            return res.status(500).json({ error: err.message });
+        }
+        console.log("[DEBUG-DB] Connected. Running query...");
+
+        tempDb.get("SELECT COUNT(*) as count FROM clients", (err, row) => {
+            console.log("[DEBUG-DB] Query Result:", err ? "Error" : "Success");
+            if (err) {
+                res.status(500).json({ error: err.message });
+            } else {
+                res.json({ count: row.count, status: 'Fresh Connection working' });
+            }
+            tempDb.close();
+        });
+    });
+});
+
+app.get('/api/dashboard/stats', async (req, res) => {
+    console.log("[DASHBOARD] Request received. Starting queries (SEQUENTIAL)...");
     const stats = {};
+    const data = {};
 
-    // Use Promise.all for parallel queries
-    const q1 = new Promise((resolve, reject) => {
-        db.get("SELECT COUNT(*) as count FROM clients", (err, row) => {
-            if (err) reject(err); else resolve({ type: 'clients', val: row.count });
+    try {
+        // Q1: Clients
+        console.log("[DASHBOARD] Q1 (Clients) Start");
+        const clients = await new Promise((resolve, reject) => {
+            db.get("SELECT COUNT(*) as count FROM clients", (err, row) => {
+                console.log("[DASHBOARD] Q1 (Clients) End");
+                if (err) reject(err); else resolve(row.count);
+            });
         });
-    });
+        data.totalClients = clients;
 
-    const q2 = new Promise((resolve, reject) => {
-        db.get("SELECT COUNT(*) as count, SUM(value) as total_value FROM deals", (err, row) => {
-            if (err) reject(err); else resolve({ type: 'deals', val: row.count, total_value: row.total_value });
+        // Q2: Deals (Active Only - Exclude Stage 5 'Concluído')
+        console.log("[DASHBOARD] Q2 (Deals) Start");
+        const deals = await new Promise((resolve, reject) => {
+            db.get("SELECT COUNT(*) as count, SUM(value) as total_value FROM deals WHERE stage_id != 5", (err, row) => {
+                console.log("[DASHBOARD] Q2 (Deals) End");
+                if (err) reject(err); else resolve(row);
+            });
         });
-    });
+        data.totalDeals = deals.count;
+        data.totalValue = deals.total_value || 0;
 
-    const q3 = new Promise((resolve, reject) => {
-        db.get("SELECT COUNT(*) as count FROM publications WHERE status = 'new'", (err, row) => {
-            if (err) reject(err); else resolve({ type: 'publications', val: row.count });
+        // Q3: Pending Signatures (Was Publications)
+        console.log("[DASHBOARD] Q3 (Pending Signatures) Start");
+        const pendingSignaturesCount = await new Promise((resolve, reject) => {
+            db.get("SELECT COUNT(*) as count FROM client_documents WHERE (status = 'sent' OR status = 'pending') AND (folder LIKE '%LawFirmCRM%' OR folder IS NULL)", (err, row) => {
+                console.log("[DASHBOARD] Q3 (Pending Signatures) End");
+                if (err) reject(err); else resolve(row.count);
+            });
         });
-    });
+        data.pendingSignatures = pendingSignaturesCount;
 
-    const q4 = new Promise((resolve, reject) => {
-        db.all("SELECT s.name, COUNT(d.id) as count FROM stages s LEFT JOIN deals d ON s.id = d.stage_id GROUP BY s.id", (err, rows) => {
-            if (err) reject(err); else resolve({ type: 'stages', val: rows });
+        // Q4: Stages (Active Only)
+        console.log("[DASHBOARD] Q4 (Stages) Start");
+        const stages = await new Promise((resolve, reject) => {
+            // Left join but ensure we don't count stage 5 deals
+            db.all("SELECT s.name, COUNT(d.id) as count FROM stages s LEFT JOIN deals d ON s.id = d.stage_id AND d.stage_id != 5 GROUP BY s.id", (err, rows) => {
+                console.log("[DASHBOARD] Q4 (Stages) End");
+                if (err) reject(err); else resolve(rows);
+            });
         });
-    });
+        data.dealsPerStage = stages;
 
-    Promise.all([q1, q2, q3, q4]).then(results => {
-        const data = {};
-        results.forEach(r => {
-            if (r.type === 'clients') data.totalClients = r.val;
-            if (r.type === 'deals') { data.totalDeals = r.val; data.totalValue = r.total_value || 0; }
-            if (r.type === 'publications') data.pendingPublications = r.val;
-            if (r.type === 'stages') data.dealsPerStage = r.val;
-        });
+        console.log("[DASHBOARD] All queries finished. Sending response.");
         res.json({ data });
-    }).catch(err => {
+
+    } catch (err) {
+        console.error("[DASHBOARD] Error in queries:", err);
         res.status(500).json({ error: err.message });
-    });
+    }
 });
 
 // API Routes
@@ -131,14 +174,39 @@ app.post('/api/deals', (req, res) => {
 app.patch('/api/deals/:id', (req, res) => {
     const { stage_id } = req.body;
     const { id } = req.params;
+    // Assuming stage_id 5 is "Concluído" based on seeding order
+    const isCompleted = Number(stage_id) === 5;
 
-    db.run(`UPDATE deals SET stage_id = ? WHERE id = ?`, [stage_id, id], function (err) {
-        if (err) {
-            res.status(400).json({ "error": err.message });
-            return;
-        }
-        res.json({ message: "updated", changes: this.changes });
-    });
+    if (isCompleted) {
+        // 1. Update Stage AND Priority AND Clear Deadline
+        db.run(`UPDATE deals SET stage_id = ?, priority = 'Concluído', deadline = NULL WHERE id = ?`, [stage_id, id], function (err) {
+            if (err) return res.status(400).json({ "error": err.message });
+
+            // 2. Log History
+            const logContent = `[SISTEMA] Tarefa movida para Concluído. Todas as flags removidas.`;
+            // user_id is unknown in this patch request context (usually), so we use NULL or a system user if we had one.
+            // But deal_comments table usually expects user_id. Let's try to get it from body or default to NULL.
+            // PATCH body only has stage_id usually.
+            // We'll insert with NULL user_id and 'System' name if possible or just rely on 'Sistema' in content.
+
+            // Actually, let's select the responsible_id to blame them? No.
+            // Just insert with null user.
+            const sqlComment = `INSERT INTO deal_comments (deal_id, user_name, content, type) VALUES (?, ?, ?, ?)`;
+            db.run(sqlComment, [id, 'Sistema', logContent, 'system'], (err2) => {
+                if (err2) console.error("Auto-log error:", err2);
+                res.json({ message: "updated (completed)", changes: this.changes });
+            });
+        });
+    } else {
+        // Standard Update
+        db.run(`UPDATE deals SET stage_id = ? WHERE id = ?`, [stage_id, id], function (err) {
+            if (err) {
+                res.status(400).json({ "error": err.message });
+                return;
+            }
+            res.json({ message: "updated", changes: this.changes });
+        });
+    }
 });
 
 // Update deal details (Generic PUT)
@@ -398,48 +466,63 @@ app.get('/api/clients', (req, res) => {
     });
 });
 
-// Create a new client
-app.post('/api/clients', (req, res) => {
-    const { name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, phone, email } = req.body;
+// CHECK DUPLICATE CPF
+app.get('/api/clients/check-cpf', (req, res) => {
+    const { cpf } = req.query;
+    if (!cpf) {
+        return res.status(400).json({ error: "CPF required" });
+    }
 
-    // Construct address for backward compatibility if needed, but we now have specific fields
-    const address = req.body.address || `${street}, ${number} - ${neighborhood}, ${city}/${state}`;
-
-    const sql = `INSERT INTO clients (name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, address, phone, email) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
-    const params = [name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, address, phone, email];
-
-    db.run(sql, params, function (err, result) {
+    const sql = "SELECT id, name FROM clients WHERE cpf = ?";
+    db.get(sql, [cpf], (err, row) => {
         if (err) {
-            res.status(400).json({ "error": err.message });
-            return;
+            return res.status(500).json({ error: err.message });
+        }
+        if (row) {
+            res.json({ exists: true, client: row });
+        } else {
+            res.json({ exists: false });
+        }
+    });
+});
+
+// CREATE CLIENT
+app.post('/api/clients', (req, res) => {
+    const { name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, phone, email, rg_issuer, rg_uf, birth_date, gender, legal_representative_name, legal_representative_cpf, is_emancipated } = req.body;
+
+    if (!name) {
+        return res.status(400).json({ error: 'Name is required' });
+    }
+
+    const sql = `INSERT INTO clients (name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, phone, email, rg_issuer, rg_uf, birth_date, gender, legal_representative_name, legal_representative_cpf, is_emancipated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    const params = [name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, phone, email, rg_issuer, rg_uf, birth_date, gender, legal_representative_name, legal_representative_cpf, is_emancipated];
+
+    db.run(sql, params, function (err) {
+        if (err) {
+            return res.status(500).json({ error: err.message });
         }
         res.json({
-            "message": "success",
-            "data": { id: this.lastID, ...req.body },
-            "id": this.lastID
+            message: "Cliente criado com sucesso!",
+            data: { id: this.lastID, ...req.body }
         });
     });
 });
 
-// Update a client
+// UPDATE CLIENT
 app.put('/api/clients/:id', (req, res) => {
-    const { name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, phone, email } = req.body;
     const { id } = req.params;
+    const { name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, phone, email, rg_issuer, rg_uf, birth_date, gender, legal_representative_name, legal_representative_cpf, is_emancipated } = req.body;
 
-    const address = req.body.address || `${street}, ${number} - ${neighborhood}, ${city}/${state}`;
-
-    const sql = `UPDATE clients SET name = ?, nationality = ?, marital_status = ?, profession = ?, rg = ?, cpf = ?, street = ?, number = ?, neighborhood = ?, city = ?, state = ?, zip = ?, address = ?, phone = ?, email = ? WHERE id = ?`;
-    const params = [name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, address, phone, email, id];
+    const sql = `UPDATE clients SET name = ?, nationality = ?, marital_status = ?, profession = ?, rg = ?, cpf = ?, street = ?, number = ?, neighborhood = ?, city = ?, state = ?, zip = ?, phone = ?, email = ?, rg_issuer = ?, rg_uf = ?, birth_date = ?, gender = ?, legal_representative_name = ?, legal_representative_cpf = ?, is_emancipated = ? WHERE id = ?`;
+    const params = [name, nationality, marital_status, profession, rg, cpf, street, number, neighborhood, city, state, zip, phone, email, rg_issuer, rg_uf, birth_date, gender, legal_representative_name, legal_representative_cpf, is_emancipated, id];
 
     db.run(sql, params, function (err) {
         if (err) {
-            res.status(400).json({ "error": err.message });
-            return;
+            return res.status(500).json({ error: err.message });
         }
         res.json({
-            "message": "success",
-            "data": { id, ...req.body },
-            "changes": this.changes
+            message: "Cliente atualizado com sucesso!",
+            data: { id, ...req.body }
         });
     });
 });
@@ -694,51 +777,38 @@ app.post('/api/login', (req, res) => {
 });
 
 // Create User
+// Create User
 app.post('/api/users', async (req, res) => {
-    const { name, email, role, cpf, phone, oab, oab_uf, office_address, nationality, marital_status } = req.body;
-
-    const parts = name.trim().toLowerCase().split(/\s+/);
-    const firstName = parts[0];
-    const lastName = parts.length > 1 ? parts[parts.length - 1] : '';
-
-    const loginOption1 = firstName;
-    const loginOption2 = lastName ? `${firstName}.${lastName}` : firstName;
-
-    const hashedPassword = await bcrypt.hash("123456", 10);
-
-    db.get('SELECT id FROM users WHERE login = ?', [loginOption1], (err, row) => {
-        if (err) { res.status(400).json({ "error": err.message }); return; }
-
-        let finalLogin = loginOption1;
-        if (row) {
-            if (loginOption2 !== loginOption1) {
-                db.get('SELECT id FROM users WHERE login = ?', [loginOption2], (err2, row2) => {
-                    if (err2) { res.status(400).json({ "error": err2.message }); return; }
-                    if (row2) {
-                        finalLogin = `${firstName}.${lastName || 'user'}.${Date.now().toString().slice(-4)}`;
-                    } else {
-                        finalLogin = loginOption2;
-                    }
-                    insertUser(finalLogin, hashedPassword);
-                });
-            } else {
-                finalLogin = `${firstName}.${Date.now().toString().slice(-4)}`;
-                insertUser(finalLogin, hashedPassword);
-            }
-        } else {
-            insertUser(finalLogin, hashedPassword);
+    const { name, email, role, cpf, phone, login, oab, oab_uf, office_address, nationality, marital_status } = req.body;
+    try {
+        // If login not provided, generate one
+        let finalLogin = login;
+        if (!finalLogin) {
+            const parts = name.trim().toLowerCase().split(/\s+/);
+            const firstName = parts[0];
+            const lastName = parts.length > 1 ? parts[parts.length - 1] : '';
+            finalLogin = `${firstName}.${lastName || 'user'}.${Date.now().toString().slice(-4)}`;
         }
-    });
 
-    function insertUser(login, password) {
-        const sql = "INSERT INTO users (name, email, role, cpf, phone, oab, oab_uf, office_address, nationality, marital_status, login, password) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)";
-        db.run(sql, [name, email, role, cpf, phone, oab, oab_uf, office_address, nationality, marital_status, login, password], function (err) {
-            if (err) { res.status(400).json({ "error": err.message }); return; }
-            res.json({
-                "message": "success",
-                "data": { id: this.lastID, name, email, role, cpf, phone, oab, oab_uf, office_address, nationality, marital_status, login }
+        const hashedPassword = await bcrypt.hash('123456', 10);
+
+        const sql = `INSERT INTO users (name, email, role, cpf, phone, login, password, oab, oab_uf, office_address, nationality, marital_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+        db.run(sql, [name, email, role || 'collaborator', cpf, phone, finalLogin, hashedPassword, oab, oab_uf, office_address, nationality, marital_status], function (err) {
+            if (err) {
+                // Handle unique constraint error
+                if (err.message.includes('UNIQUE constraint failed')) {
+                    return res.status(400).json({ error: "Email ou Login já está em uso." });
+                }
+                return res.status(400).json({ error: err.message });
+            }
+            db.get("SELECT id, name, email, login, role, cpf, phone, oab, oab_uf, office_address, nationality, marital_status, created_at FROM users WHERE id = ?", [this.lastID], (err, row) => {
+                res.status(201).json({ "data": row });
             });
         });
+
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
 });
 
@@ -792,21 +862,22 @@ app.post('/api/publications/sync', (req, res) => {
 
             // Save results
             let savedCount = 0;
-            const insertStmt = db.prepare(`
+            // Save results
+
+            const insertQuery = `
                 INSERT INTO publications (external_id, content, process_number, publication_date, court, status) 
                 VALUES (?, ?, ?, ?, ?, 'new')
                 ON CONFLICT(external_id) DO UPDATE SET status = status
-            `);
+            `;
 
-            db.serialize(() => {
-                db.run("BEGIN TRANSACTION");
-                results.forEach(pub => {
-                    insertStmt.run(pub.id, pub.content, pub.process_number, pub.publication_date, pub.court);
-                    savedCount++;
+            for (const pub of results) {
+                await new Promise((resolve) => {
+                    db.run(insertQuery, [pub.id, pub.content, pub.process_number, pub.publication_date, pub.court], (err) => {
+                        if (!err) savedCount++;
+                        resolve();
+                    });
                 });
-                db.run("COMMIT");
-            });
-            insertStmt.finalize();
+            }
 
             res.json({ message: "Sincronização concluída", count: savedCount });
 
@@ -914,6 +985,213 @@ app.get('/api/clients/:id/documents', (req, res) => {
     });
 });
 
+// PENDING SIGNATURES ENDPOINT
+app.get('/api/documents/pending', (req, res) => {
+    const sql = `
+        SELECT 
+            cd.id, cd.title, cd.filename, cd.status, cd.created_at, cd.signers_data, cd.signer_link,
+            c.name as client_name, c.email as client_email,
+            u.name as creator_name, cd.folder
+        FROM client_documents cd
+        LEFT JOIN clients c ON cd.client_id = c.id
+        LEFT JOIN users u ON cd.created_by = u.id
+        WHERE (cd.status = 'sent' OR cd.status = 'pending' OR cd.status = 'signed')
+        AND cd.folder = '/LawFirmCRM/'
+        ORDER BY 
+            cd.id DESC
+    `;
+
+    db.all(sql, [], (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ data: rows });
+    });
+});
+
+// ZAPSIGN SYNC ENDPOINT
+app.post('/api/documents/sync-status', async (req, res) => {
+    console.log("[SYNC] Request Request Received");
+    // 1. Get Token
+    db.get('SELECT zapsign_token FROM office_settings LIMIT 1', async (err, row) => {
+        if (err || !row || !row.zapsign_token) {
+            return res.status(500).json({ error: "Token ZapSign não configurado." });
+        }
+        const ZAPSIGN_TOKEN = row.zapsign_token.trim();
+
+        // 2. Fetch ALL docs from ZapSign (Handling pagination)
+        try {
+            let nextUrl = `https://api.zapsign.com.br/api/v1/docs/?api_token=${ZAPSIGN_TOKEN}`;
+            const zapDocs = [];
+
+            while (nextUrl) {
+                const zapRes = await axios.get(nextUrl);
+                const results = zapRes.data.results || [];
+                zapDocs.push(...results);
+                nextUrl = zapRes.data.next;
+            }
+
+            // Create lookup maps
+            const zapByToken = new Map();
+            const zapByOpenId = new Map();
+            zapDocs.forEach(d => {
+                if (d.token) zapByToken.set(d.token, d);
+                if (d.open_id) zapByOpenId.set(String(d.open_id), d);
+            });
+
+            // 3. Get Local Documents (All with external_id)
+            db.all("SELECT id, external_id, signers_data, folder FROM client_documents WHERE external_id IS NOT NULL", async (err, localDocs) => {
+                if (err) return res.status(500).json({ error: err.message });
+
+                let updatedCount = 0;
+                let importedCount = 0;
+                const errors = [];
+
+                // Track processed ZapDocs to avoid double import
+                const processedZapTokens = new Set();
+
+                // 4. Update EXISTING Local Docs
+                const updates = localDocs.map(async (localDoc) => {
+                    if (!localDoc.external_id) return;
+
+                    // Try match by Token first, then OpenID (Legacy)
+                    let match = zapByToken.get(localDoc.external_id);
+                    let isLegacyMatch = false;
+
+                    if (!match) {
+                        match = zapByOpenId.get(String(localDoc.external_id));
+                        if (match) isLegacyMatch = true;
+                    }
+
+                    if (match) {
+                        processedZapTokens.add(match.token); // Mark as processed for import step
+
+                        // Determine Status
+                        let newStatus = 'sent';
+                        if (match.deleted) newStatus = 'canceled'; // MARK DELETED AS CANCELED
+                        else if (match.status === 'signed') newStatus = 'signed';
+                        else if (match.status === 'refused') newStatus = 'canceled';
+
+                        // Signers Data (ZapSign List usually summarizes, might need detail fetch if incomplete)
+                        // The list endpoint returns 'signers' array too? Let's assume yes or rely on status.
+                        // Ideally we verify signers, but if the doc is SIGNED, we trust it.
+                        const allSigners = match.signers ? match.signers.map(s => ({
+                            name: s.name,
+                            email: s.email,
+                            sign_url: s.sign_url,
+                            status: s.status
+                        })) : [];
+
+                        // Only update if status/folder changed or if we need to upgrade the ID
+                        if (newStatus !== 'sent' || isLegacyMatch || JSON.stringify(allSigners) !== localDoc.signers_data || match.folder_path !== localDoc.folder) {
+                            await new Promise((resolve) => {
+                                // If legacy match, upgrade external_id to token
+                                const newExternalId = match.token;
+                                db.run(
+                                    'UPDATE client_documents SET status = ?, external_id = ?, signers_data = ?, folder = ? WHERE id = ?',
+                                    [newStatus, newExternalId, JSON.stringify(allSigners), match.folder_path, localDoc.id],
+                                    (err) => resolve()
+                                );
+                            });
+                            updatedCount++;
+                        }
+                    } else {
+                        // Document found locally but NOT in ZapSign?
+                        // Could be deleted or another account?
+                        // We leave it as is.
+                    }
+                });
+
+                await Promise.all(updates);
+
+                // 5. IMPORT New Docs from /LawFirmCRM/
+                const importPromises = zapDocs.map(async (zapDoc) => {
+                    // Filter: Only LawFirmCRM folder AND Not already processed AND Not Deleted
+                    if (zapDoc.folder_path === '/LawFirmCRM/' && !zapDoc.deleted) {
+
+                        // FETCH DETAILS to get Signers Links
+                        let detailedDoc = zapDoc;
+                        try {
+                            const detailRes = await axios.get(`https://api.zapsign.com.br/api/v1/docs/${zapDoc.token}/?api_token=${ZAPSIGN_TOKEN}`);
+                            detailedDoc = detailRes.data;
+                        } catch (e) {
+                            console.error(`Failed to fetch details for ${zapDoc.name}`, e.message);
+                        }
+
+                        // Map Status
+                        let status = 'sent';
+                        if (detailedDoc.status === 'signed') status = 'signed';
+                        else if (detailedDoc.status === 'refused') status = 'canceled';
+
+                        const allSigners = detailedDoc.signers ? detailedDoc.signers.map(s => ({
+                            name: s.name,
+                            email: s.email,
+                            sign_url: s.sign_url,
+                            status: s.status
+                        })) : [];
+
+                        const firstSigner = detailedDoc.signers && detailedDoc.signers.length > 0 ? detailedDoc.signers[0] : null;
+
+                        if (!processedZapTokens.has(zapDoc.token)) {
+                            // --- INSERT LOGIC ---
+                            let clientId = null;
+                            if (firstSigner && firstSigner.email) {
+                                try {
+                                    const client = await new Promise((resolve, reject) => {
+                                        db.get('SELECT id FROM clients WHERE email = ?', [firstSigner.email], (err, row) => {
+                                            if (err) reject(err); else resolve(row);
+                                        });
+                                    });
+                                    if (client) clientId = client.id;
+                                } catch (e) { }
+                            }
+
+                            const signerLink = firstSigner ? firstSigner.sign_url : '';
+
+                            await new Promise((resolve, reject) => {
+                                db.run(
+                                    `INSERT INTO client_documents (title, type, status, external_id, client_id, signers_data, signer_link, created_by, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                    [detailedDoc.name, 'Auto-Import', status, detailedDoc.token, clientId, JSON.stringify(allSigners), signerLink, null, detailedDoc.folder_path, detailedDoc.created_at],
+                                    (err) => {
+                                        if (err) console.error("Import Error", err);
+                                        resolve();
+                                    }
+                                );
+                            });
+                            importedCount++;
+
+                        } else {
+                            // --- UPDATE LOGIC (for existing docs in this folder) ---
+                            // We need to update existing docs too because their signer links might be missing
+                            // Use external_id (token) to find the local ID
+                            await new Promise((resolve) => {
+                                db.run(
+                                    'UPDATE client_documents SET status = ?, signers_data = ?, folder = ? WHERE external_id = ?',
+                                    [status, JSON.stringify(allSigners), detailedDoc.folder_path, detailedDoc.token],
+                                    (err) => resolve()
+                                );
+                            });
+                            updatedCount++;
+                        }
+                    }
+                });
+
+                await Promise.all(importPromises);
+
+                res.json({
+                    message: "Sync & Import complete",
+                    checked: localDocs.length,
+                    updated: updatedCount,
+                    imported: importedCount,
+                    total_remote: zapDocs.length
+                });
+            });
+
+        } catch (error) {
+            console.error("ZapSign List Error:", error.message);
+            res.status(500).json({ error: "Falha ao buscar lista da ZapSign: " + error.message });
+        }
+    });
+});
+
 // ZapSign Integration
 app.post('/api/documents/:id/sign', async (req, res) => {
     const docId = req.params.id;
@@ -947,6 +1225,17 @@ app.post('/api/documents/:id/sign', async (req, res) => {
                 return res.status(404).json({ error: "Documento não encontrado." });
             }
 
+            // AUTO-FIX: Check if file exists at stored path. If not, try relative path.
+            if (!fs.existsSync(doc.path)) {
+                const recoveredPath = path.join(__dirname, '../uploads/clients', String(doc.client_id), doc.filename);
+                if (fs.existsSync(recoveredPath)) {
+                    console.log(`[ZAPSIGN] Path fixed: ${doc.path} -> ${recoveredPath}`);
+                    doc.path = recoveredPath;
+                } else {
+                    console.error(`[ZAPSIGN] File missing at ${doc.path} AND ${recoveredPath}`);
+                }
+            }
+
             try {
                 // 3. Prepare Form Data for ZapSign
                 // ZapSign Upload: POST https://api.zapsign.com.br/api/v1/docs/
@@ -959,14 +1248,17 @@ app.post('/api/documents/:id/sign', async (req, res) => {
                 try {
                     let base64File = '';
                     if (fs.existsSync(doc.path)) {
+                        console.log(`[DEBUG] File found at: ${doc.path}`);
                         if (doc.path.endsWith('.html')) {
-                            console.log("Convertendo HTML para PDF...");
+                            console.log("[DEBUG] Starting HTML to PDF conversion...");
                             try {
                                 const browser = await puppeteer.launch({
                                     headless: true,
-                                    args: ['--no-sandbox', '--disable-setuid-sandbox'] // Safer for server environments
+                                    args: ['--no-sandbox', '--disable-setuid-sandbox']
                                 });
+                                console.log("[DEBUG] Puppeteer Launched");
                                 const page = await browser.newPage();
+                                console.log("[DEBUG] Page Created");
 
                                 // Wrap fragment in full HTML to ensure proper rendering
                                 const fullHtml = `
@@ -984,25 +1276,32 @@ app.post('/api/documents/:id/sign', async (req, res) => {
                                     </html>
                                 `;
 
-                                await page.setContent(fullHtml, { waitUntil: 'load' }); // 'load' is often faster/sufficient for simple HTML
+                                console.log("[DEBUG] Puppeteer: Setting Content...");
+                                await page.setContent(fullHtml, { waitUntil: 'load', timeout: 30000 });
+                                console.log("[DEBUG] Content Set on Page");
 
                                 const pdfBuffer = await page.pdf({
                                     format: 'A4',
                                     printBackground: true,
                                     margin: { top: '2cm', right: '2cm', bottom: '2cm', left: '2cm' }
                                 });
+                                console.log("[DEBUG] PDF Generated");
 
                                 await browser.close();
+                                console.log("[DEBUG] Browser Closed");
+
                                 base64File = Buffer.from(pdfBuffer).toString('base64');
-                                console.log(`Conversão concluída. Tamanho: ${base64File.length}. Header: ${base64File.substring(0, 15)}...`);
+                                console.log(`[DEBUG] Conversion success. Size: ${base64File.length}`);
                             } catch (conversionErr) {
-                                console.error("Erro na conversão PDF:", conversionErr);
+                                console.error("[ERROR] PDF Conversion Failed:", conversionErr);
                                 return res.status(500).json({ error: "Falha ao gerar PDF para assinatura." });
                             }
                         } else {
+                            console.log("[DEBUG] Reading file directly (not HTML)...");
                             base64File = fs.readFileSync(doc.path, { encoding: 'base64' });
                         }
                     } else {
+                        console.error(`[ERROR] File NOT found at ${doc.path}`);
                         return res.status(404).json({ error: "Arquivo do documento não encontrado no disco." });
                     }
 
@@ -1011,20 +1310,24 @@ app.post('/api/documents/:id/sign', async (req, res) => {
                     // However, for now, we try sending it.
 
 
+                    const { signerEmail, signerName, signerPhone, additionalSigners } = req.body;
+
                     // 4. Prepare Signers
                     let signers = [{
                         name: signerName,
                         email: signerEmail,
+                        phone_number: signerPhone,
                         auth_mode: 'assinaturaTela'
                     }];
 
                     // Add Additional Signers (Lawyers/Witnesses)
-                    if (req.body.additionalSigners && Array.isArray(req.body.additionalSigners)) {
-                        req.body.additionalSigners.forEach(s => {
+                    if (additionalSigners && Array.isArray(additionalSigners)) {
+                        additionalSigners.forEach(s => {
                             if (s.name && s.email) {
                                 signers.push({
                                     name: s.name,
                                     email: s.email,
+                                    phone_number: s.phone_number,
                                     auth_mode: 'assinaturaTela'
                                 });
                             }
@@ -1046,16 +1349,27 @@ app.post('/api/documents/:id/sign', async (req, res) => {
                         }
                     });
 
+                    console.log("[DEBUG] ZapSign Response Status:", response.status);
                     const zapDoc = response.data;
+                    console.log("[DEBUG] ZapSign Response Data:", JSON.stringify(zapDoc));
                     // Get the signer link for the CLIENT (first signer)
                     // ZapSign returns an array of signers. We find the one matching the client's email or just take the first one if we assume order.
                     const clientSigner = zapDoc.signers.find(s => s.email === signerEmail) || zapDoc.signers[0];
                     const signerLink = clientSigner.sign_url;
-                    const externalId = zapDoc.open_id;
+                    const externalId = zapDoc.token; // USE TOKEN (UUID) NOT OPEN_ID
 
                     // 5. Update Local DB
-                    db.run('UPDATE client_documents SET external_id = ?, signer_link = ?, status = ? WHERE id = ?',
-                        [externalId, signerLink, 'sent', docId],
+                    // Store all signers data for multi-link support
+                    // format: [{name, email, sign_url, status}, ...]
+                    const allSigners = zapDoc.signers.map(s => ({
+                        name: s.name,
+                        email: s.email,
+                        sign_url: s.sign_url,
+                        status: s.status
+                    }));
+
+                    db.run('UPDATE client_documents SET external_id = ?, signer_link = ?, status = ?, signers_data = ? WHERE id = ?',
+                        [externalId, signerLink, 'sent', JSON.stringify(allSigners), docId],
                         (err) => {
                             if (err) console.error("Error updating doc status:", err);
                         }
@@ -1064,7 +1378,8 @@ app.post('/api/documents/:id/sign', async (req, res) => {
                     res.json({
                         message: "Enviado para ZapSign com sucesso!",
                         signer_link: signerLink,
-                        external_id: externalId
+                        external_id: externalId,
+                        signers_data: allSigners
                     });
                 } catch (innerError) {
                     console.error("ZapSign Axios Error Response:", innerError.response ? innerError.response.data : innerError.message);
@@ -1084,12 +1399,27 @@ app.post('/api/documents/:id/sign', async (req, res) => {
 
 app.get('/api/documents/:id/content', (req, res) => {
     const docId = req.params.id;
-    db.get('SELECT path FROM client_documents WHERE id = ?', [docId], (err, row) => {
+    // Fetch filename and client_id to reconstruct path if absolute path fails (migration support)
+    db.get('SELECT path, filename, client_id FROM client_documents WHERE id = ?', [docId], (err, row) => {
         if (err || !row) {
             return res.status(404).json({ error: "Document not found" });
         }
 
-        fs.readFile(row.path, 'utf8', (err, data) => {
+        let filePath = row.path;
+
+        // AUTO-FIX: Check if file exists at stored path. If not, try relative path.
+        if (!fs.existsSync(filePath)) {
+            // Reconstruct path: /uploads/clients/{id}/{filename} relative to this server file
+            const recoveredPath = path.join(__dirname, '../uploads/clients', String(row.client_id), row.filename);
+            if (fs.existsSync(recoveredPath)) {
+                console.log(`[RECOVERY] Path fixed: ${filePath} -> ${recoveredPath}`);
+                filePath = recoveredPath;
+            } else {
+                console.error(`[ERROR] File missing at ${filePath} AND ${recoveredPath}`);
+            }
+        }
+
+        fs.readFile(filePath, 'utf8', (err, data) => {
             if (err) {
                 return res.status(500).json({ error: "Failed to read document file" });
             }
@@ -1129,6 +1459,7 @@ app.put('/api/users/:id', async (req, res) => {
         const sql = `UPDATE users SET 
             name = COALESCE(?, name), 
             email = COALESCE(?, email), 
+            login = COALESCE(?, login),
             cpf = COALESCE(?, cpf), 
             phone = COALESCE(?, phone), 
             role = COALESCE(?, role),
@@ -1140,7 +1471,7 @@ app.put('/api/users/:id', async (req, res) => {
             password = ?
             WHERE id = ?`;
 
-        db.run(sql, [name, email, cpf, phone, role, oab, oab_uf, office_address, nationality, marital_status, passwordToSet, id], function (err) {
+        db.run(sql, [name, email, req.body.login, cpf, phone, role, oab, oab_uf, office_address, nationality, marital_status, passwordToSet, id], function (err) {
             if (err) { res.status(400).json({ error: err.message }); return; }
             res.json({ message: "success", changes: this.changes });
         });
@@ -1191,7 +1522,121 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../client/dist/index.html'));
 });
 
-app.listen(PORT, () => {
+// Serve static files from React app (Production Build)
+app.use(express.static(path.join(__dirname, '../client/dist')));
+
+// The "catchall" handler: for any request that doesn't
+// match one above, send back React's index.html file.
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+});
+
+// --- ZAPSIGN INTEGRATION ---
+
+
+app.post('/api/zapsign/create', async (req, res) => {
+    console.log("[ZAPSIGN] Create Request Received");
+    const { clientId, title, htmlContent, signers } = req.body;
+
+    // Validation
+    if (!title || !htmlContent || !signers || !Array.isArray(signers) || signers.length === 0) {
+        return res.status(400).json({ error: "Dados inválidos. Necessário Título, Conteúdo e Signatários." });
+    }
+
+    try {
+        // 1. Get Token from DB
+        const settings = await new Promise((resolve, reject) => {
+            db.get('SELECT zapsign_token, zapsign_folder_path FROM office_settings LIMIT 1', (err, row) => {
+                if (err) reject(err); else resolve(row);
+            });
+        });
+
+        if (!settings || !settings.zapsign_token) {
+            return res.status(400).json({ error: "Token ZapSign não configurado nas configurações do escritório." });
+        }
+
+        const ZAPSIGN_TOKEN = settings.zapsign_token;
+        const FOLDER_PATH = settings.zapsign_folder_path || '/LawFirmCRM';
+
+        console.log("[ZAPSIGN] Generating PDF...");
+        // 2. Generate PDF
+        const browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+        const pdfBuffer = await page.pdf({
+            format: 'A4',
+            printBackground: true,
+            margin: { top: '20px', bottom: '20px', left: '20px', right: '20px' }
+        });
+        await browser.close();
+        console.log("[ZAPSIGN] PDF Generated. Size:", pdfBuffer.length);
+
+        // 3. Prepare ZapSign Payload
+        const form = new FormData();
+        form.append('name', title);
+        form.append('file', pdfBuffer, { filename: `${title}.pdf` });
+        form.append('signers', JSON.stringify(signers));
+        form.append('folder_path', FOLDER_PATH);
+        form.append('lang', 'pt-br');
+        form.append('send_automatic_email', 'true');
+        form.append('send_automatic_whatsapp', 'true'); // Auto-send via WhatsApp if number provided
+
+        console.log("[ZAPSIGN] Signers for Payload:", JSON.stringify(signers, null, 2));
+        console.log("[ZAPSIGN] Uploading to API...");
+        // 4. Send to ZapSign
+        const zapRes = await axios.post('https://api.zapsign.com.br/api/v1/docs/', form, {
+            headers: {
+                ...form.getHeaders(),
+                'Authorization': `Bearer ${ZAPSIGN_TOKEN}`
+            }
+        });
+
+        const zapDoc = zapRes.data;
+        console.log("[ZAPSIGN] Success! Token:", zapDoc.token);
+
+        // 5. Save/Update Local DB
+        // Check if document already exists logic? No, this is a NEW doc.
+        // We insert a new record in client_documents
+
+        const stmt = db.prepare(`INSERT INTO client_documents (client_id, type, title, status, created_at, created_by, external_id, signer_link, signers_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+
+        // Find the "client" signer link - usually the first one or matching name
+        // We just store the first one as primary link for now, or null
+        const primaryLink = zapDoc.signers[0]?.sign_url;
+        const signersDataStr = JSON.stringify(zapDoc.signers);
+
+        const type = title.toLowerCase().includes('procuração') ? 'PROCURACAO' : 'CONTRATO';
+        const now = new Date().toISOString();
+        const createdBy = req.body.createdBy || 1; // Default admin if missing
+
+        stmt.run(clientId, type, title, 'sent', now, createdBy, zapDoc.token, primaryLink, signersDataStr, function (err) {
+            if (err) {
+                console.error("[DB] Check Error on Insert:", err);
+                // Don't fail the request if ZapSign succeeded
+            }
+        });
+        stmt.finalize();
+
+        res.json({
+            success: true,
+            doc_token: zapDoc.token,
+            signers: zapDoc.signers,
+            link: primaryLink
+        });
+
+    } catch (error) {
+        console.error("[ZAPSIGN] Error:", error.response?.data || error.message);
+        res.status(500).json({
+            error: "Erro ao criar documento no ZapSign",
+            details: error.response?.data || error.message
+        });
+    }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     const mode = process.env.DATABASE_URL ? 'Production (PostgreSQL)' : 'Development (SQLite)';
     console.log(`Environment: ${mode}`);

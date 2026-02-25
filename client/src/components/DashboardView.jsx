@@ -13,10 +13,15 @@ export function DashboardView() {
 
     const fetchStats = async () => {
         try {
-            const res = await axios.get('/api/dashboard/stats');
-            setStats(res.data.data);
+            const res = await axios.get('/api/dashboard/stats', { timeout: 15000 });
+            if (res.data && res.data.data) {
+                setStats(res.data.data);
+            } else {
+                throw new Error("Dados inválidos recebidos do servidor.");
+            }
         } catch (error) {
-            console.error(error);
+            console.error("Dashboard Error:", error);
+            setStats(null); // Ensure unsuccess state
         } finally {
             setLoading(false);
         }
@@ -81,8 +86,8 @@ export function DashboardView() {
                         <FileText size={24} />
                     </div>
                     <div>
-                        <p className="text-sm text-muted-foreground font-medium">Publicações Pendentes</p>
-                        <h3 className="text-2xl font-bold">{stats.pendingPublications}</h3>
+                        <p className="text-sm text-muted-foreground font-medium">Assinaturas Pendentes</p>
+                        <h3 className="text-2xl font-bold">{stats.pendingSignatures || 0}</h3>
                     </div>
                 </div>
             </div>

@@ -18,11 +18,11 @@ export function SettingsView() {
         datajud_key: ''
     });
     const [users, setUsers] = useState([]);
-    const [newUser, setNewUser] = useState({ name: '', email: '', role: 'collaborator', cpf: '', phone: '' });
+    const [newUser, setNewUser] = useState({ name: '', email: '', role: 'collaborator', cpf: '', phone: '', login: '' });
 
     // Edit State
     const [editingUser, setEditingUser] = useState(null);
-    const [editData, setEditData] = useState({ name: '', email: '', role: '', cpf: '', phone: '', currentPassword: '', newPassword: '' });
+    const [editData, setEditData] = useState({ name: '', email: '', role: '', cpf: '', phone: '', login: '', currentPassword: '', newPassword: '' });
 
     useEffect(() => {
         fetchOfficeData();
@@ -70,7 +70,7 @@ export function SettingsView() {
         try {
             const res = await axios.post('/api/users', newUser);
             setUsers([...users, res.data.data]);
-            setNewUser({ name: '', email: '', role: 'collaborator', cpf: '', phone: '' });
+            setNewUser({ name: '', email: '', role: 'collaborator', cpf: '', phone: '', login: '' });
         } catch (error) {
             console.error(error);
         }
@@ -93,6 +93,7 @@ export function SettingsView() {
         setEditData({
             name: user.name,
             email: user.email,
+            login: user.login || '',
             role: user.role,
             cpf: user.cpf || '',
             phone: user.phone || '',
@@ -149,6 +150,10 @@ export function SettingsView() {
                                 <div>
                                     <label className="block text-sm font-medium mb-1">Nome</label>
                                     <input className="w-full h-10 px-3 border rounded-md" value={editData.name} onChange={e => setEditData({ ...editData, name: e.target.value })} />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Login (Usuário)</label>
+                                    <input className="w-full h-10 px-3 border rounded-md" value={editData.login} onChange={e => setEditData({ ...editData, login: e.target.value })} placeholder="Ex: joao.silva" />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium mb-1">Email</label>
@@ -442,6 +447,15 @@ export function SettingsView() {
                                         onChange={e => setNewUser({ ...newUser, name: e.target.value })}
                                         required
                                         placeholder="Nome do usuário"
+                                    />
+                                </div>
+                                <div className="flex-1">
+                                    <label className="block text-sm font-medium mb-1">Login (Usuário)</label>
+                                    <input
+                                        className="w-full h-10 px-3 rounded-md border border-input bg-background"
+                                        value={newUser.login || ''}
+                                        onChange={e => setNewUser({ ...newUser, login: e.target.value })}
+                                        placeholder="Ex: joao.silva"
                                     />
                                 </div>
                                 <div className="flex-1">

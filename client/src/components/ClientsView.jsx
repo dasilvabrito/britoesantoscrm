@@ -1,16 +1,69 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Plus, Search, User, Mail, Phone, MapPin, FileText, Clock } from 'lucide-react';
+import { Plus, Search, User, Mail, Phone, MapPin, FileText, Clock, Copy, Check, Calendar } from 'lucide-react';
 import { NewClientModal } from './NewClientModal';
 import { LawyerSelectionModal } from './LawyerSelectionModal';
 import { ContractGenerationModal } from './ContractGenerationModal';
 import { ClientDocumentsModal } from './ClientDocumentsModal';
+
+import { ZapSignModal } from './ZapSignModal';
+import { valorPorExtenso } from '../utils/formatters';
+
+function CopyButton({ text, title = "Copiar" }) {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = (e) => {
+        e.stopPropagation();
+        if (!text) return;
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    return (
+        <button
+            onClick={handleCopy}
+            className={`p-1 rounded transition-colors ${copied ? 'text-green-500 bg-green-50' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+            title={copied ? "Copiado!" : title}
+        >
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+        </button>
+    );
+}
+
+function getFullAddress(client) {
+    if (!client) return '-';
+
+    // If we have individual components, use them
+    const components = [];
+    if (client.street) components.push(client.street);
+    if (client.number) components.push(client.number);
+    if (client.neighborhood) components.push(client.neighborhood);
+    if (client.city) components.push(`${client.city}${client.state ? `-${client.state}` : ''}`);
+    if (client.zip) components.push(`CEP ${client.zip}`);
+
+    const structured = components.join(', ');
+
+    // Return structured if we have it, otherwise fallback to the legacy address field
+    return structured || client.address || '-';
+}
+
+function formatDate(dateString) {
+    if (!dateString) return '-';
+    // dateString is YYYY-MM-DD
+    const [year, month, day] = dateString.split('-');
+    return `${day}/${month}/${year}`;
+}
 
 export function ClientsView() {
     const [clients, setClients] = useState([]);
     const [search, setSearch] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [selectedClient, setSelectedClient] = useState(null);
+
+    // ZapSign Modal State
+    const [isZapModalOpen, setIsZapModalOpen] = useState(false);
+    const [zapDocData, setZapDocData] = useState(null);
 
     // Proxy Generation State
     const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
@@ -90,7 +143,7 @@ export function ClientsView() {
         setIsHistoryModalOpen(true);
     };
 
-    const saveAndOpenDocument = async (client, type, title, htmlContent, description = null) => {
+    const saveAndOpenDocument = async (client, type, title, htmlContent, description = null, signers = []) => {
         // 1. Save to backend
         try {
             await axios.post(`/api/clients/${client.id}/documents`, {
@@ -137,6 +190,17 @@ export function ClientsView() {
             </html>
         `);
         win.document.close();
+
+        // 3. Open ZapSign Confirmation (NEW)
+        if (signers && signers.length > 0) {
+            setZapDocData({
+                client,
+                title,
+                htmlContent,
+                signers
+            });
+            setIsZapModalOpen(true);
+        }
     };
 
     const openProxyModal = (e, client) => {
@@ -155,23 +219,60 @@ export function ClientsView() {
             const separation = index === 0 ? "" : isLast ? " e " : ", ";
             const nationality = lawyer.nationality || 'brasileiro(a)';
             const maritalStatus = lawyer.marital_status || 'casado(a)';
-            const qualification = `${nationality.toLowerCase()}, ${maritalStatus.toLowerCase()}, advogado(a), inscrito(a) na OAB/${lawyer.oab_uf || 'UF'} sob o nº ${lawyer.oab || '0000'}, com endereço profissional à ${lawyer.office_address || 'Endereço não informado'}`;
-            return `${separation}<strong>${lawyer.name.toUpperCase()}</strong>, ${qualification}`;
+            const qualification = `${nationality.toLowerCase()}, ${maritalStatus.toLowerCase()}, advogado(a), inscrito(a) na OAB / ${lawyer.oab_uf || 'UF'} sob o nº ${lawyer.oab || '0000'}, com endereço profissional à ${lawyer.office_address || 'Endereço não informado'} `;
+            return `${separation} <strong>${lawyer.name.toUpperCase()}</strong>, ${qualification} `;
         }).join('');
 
         const date = new Date();
         const months = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
-        const dateCommon = `${date.getDate()} de ${months[date.getMonth()]} de ${date.getFullYear()}`;
+        const dateCommon = `${date.getDate()} de ${months[date.getMonth()]} de ${date.getFullYear()} `;
+
+        const formatDate = (dateString) => {
+            if (!dateString) return '__________';
+            const [year, month, day] = dateString.split('-');
+            return `${day} /${month}/${year} `;
+        }
+        const birthDate = formatDate(client.birth_date);
+
+        // Uppercase Issuer
+        const rgIssuerUpper = (client.rg_issuer || '').toUpperCase();
+        const rgUfUpper = (client.rg_uf || '').toUpperCase();
+        const rgFull = `${client.rg || '_______'} ${rgIssuerUpper}/${rgUfUpper}`;
+
+        // Gendered "Nascido" & "Portador"
+        const bornText = client.gender === 'Feminino' ? 'nascida' : 'nascido';
+        const carrierText = client.gender === 'Feminino' ? 'portadora' : 'portador';
+
+        // Representation Logic
+        let representationText = "";
+        let minorTerm = "";
+
+        if (client.birth_date) {
+            const birth = new Date(client.birth_date);
+            const today = new Date();
+            let age = today.getFullYear() - birth.getFullYear();
+            const m = today.getMonth() - birth.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+                age--;
+            }
+
+            if (age < 18 && !client.is_emancipated) {
+                const repName = (client.legal_representative_name || '_______').toUpperCase();
+                const repCpf = (client.legal_representative_cpf || '_______');
+                representationText = `, neste ato representado(a) por seu/sua Representante Legal <strong>${repName}</strong>, CPF nº <strong>${repCpf}</strong>`;
+                minorTerm = ", menor impúbere";
+            }
+        }
 
         const htmlContent = `
             <div style="font-family: 'Times New Roman', Times, serif; font-size: 12pt; line-height: 1.5; text-align: justify; color: black; padding: 20px;">
                 <h3 style="text-align: center; text-transform: uppercase; margin-bottom: 2rem;">PROCURAÇÃO “AD JUDICIA ET EXTRA”</h3>
                 <p>
-                  <strong>${client.name.toUpperCase()}</strong>, ${client.nationality || '_______'}, ${client.marital_status || '_______'}, ${client.profession || '_______'}, 
-                  portador(a) do RG sob n. ${client.rg || '_______'} e do CPF sob n. ${client.cpf || '_______'}, 
-                  residente e domiciliado na ${client.street || '_______'}, ${client.number || '___'}, ${client.neighborhood || '_______'}, ${client.city || '_______'}-${client.state || '__'}, CEP ${client.zip || '_______'}, por este instrumento de procuração, 
+                  <strong>${client.name.toUpperCase()}</strong>${minorTerm}, ${client.nationality || '_______'}, ${client.marital_status || '_______'}, ${client.profession || '_______'}, 
+                  ${bornText} em ${birthDate}, ${carrierText} do RG nº ${rgFull.trim()} e do CPF sob n. ${client.cpf || '_______'}, 
+                  residente e domiciliado na ${client.street || '_______'}, ${client.number || '___'}, ${client.neighborhood || '_______'}, ${client.city || '_______'}-${client.state || '__'}, CEP ${client.zip || '_______'}${representationText}, por este instrumento de procuração, 
                   nomeia e constitui seu bastante procurador, ${lawyerText}, a quem confere amplos e ilimitados poderes para o foro em geral, 
-                  com a cláusula <em>ad judicia et extra</em> com poderes para o foro em geral e mais os especiais para transigir, confessar, desistir, 
+                  com a cláusula <em>ad judicia et extra</em> com poderes para o foro em general e mais os especiais para transigir, confessar, desistir, 
                   fazer acordos, firmar compromissos e termos, variar de ações, receberam da quitação de alvarás, podendo defender o outorgante 
                   nas ações que lhe forem proposta perante qualquer juízo ou tribunal, propor quaisquer medidas preliminares, preventivas ou 
                   assecuratórias dos seus direitos e interesses, representar o outorgante perante qual a quaisquer repartições públicas federais, estatuais, 
@@ -180,7 +281,7 @@ export function ClientsView() {
                   interpor recursos em qualquer grau de jurisdição, requerer inventario ou partilha de bens, habilitar créditos, assinar termos de 
                   inventariante, prestar as primeiras e ultimas declarações, prestar toda e qualquer declaração de praxe e qualquer e que se fizerem 
                   necessárias, substabelecer o presente com ou sem reserva de poderes, e representa-la em qualquer tipo de ação judicial ou extrajudicial, 
-                  bem como acompanhar a receber fazer e quitação em bancos, bem como para atestar a hipossuficiência econômica, declarar, requerer 
+                  bem como acompanhar a receber fazer e quitação em bancos, bem como para atestar a hipossuficiência econômica, assinar qualquer DECLARAÇÃO DE ISENÇÃO, inclusive a de IRPF, declarar, requerer 
                   os benefícios da justiça gratuita e renunciar o excedente de valores de alçada dos juizados especiais se houver.
                 </p>
                 <p style="margin-top: 2rem;">Conceição do Araguaia - PA, ${dateCommon}.</p>
@@ -192,7 +293,12 @@ export function ClientsView() {
             </div>
         `;
 
-        await saveAndOpenDocument(client, 'PROCURACAO', `Procuração - ${client.name}`, htmlContent, 'Procuração Ad Judicia');
+        const signers = [
+            { name: client.name, email: client.email, phone_number: client.phone, auth_mode: 'assinaturaTela', require_selfie: true },
+            ...selectedLawyers.map(l => ({ name: l.name, email: l.email, phone_number: l.phone }))
+        ];
+
+        await saveAndOpenDocument(client, 'PROCURACAO', `Procuração - ${client.name}`, htmlContent, 'Procuração Ad Judicia', signers);
     };
 
     // --- Contract Generation ---
@@ -211,6 +317,43 @@ export function ClientsView() {
         const months = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
         const dateFull = `${date.getDate()} de ${months[date.getMonth()]} de ${date.getFullYear()}`;
 
+        const formatDate = (dateString) => {
+            if (!dateString) return '__________';
+            const [year, month, day] = dateString.split('-');
+            return `${day}/${month}/${year}`;
+        }
+        const birthDate = formatDate(client.birth_date);
+
+        // Uppercase Issuer
+        const rgIssuerUpper = (client.rg_issuer || '').toUpperCase();
+        const rgUfUpper = (client.rg_uf || '').toUpperCase();
+        const rgFull = `${client.rg || '_______'} ${rgIssuerUpper}/${rgUfUpper}`;
+
+        // Gendered "Nascido" & "Portador"
+        const bornText = client.gender === 'Feminino' ? 'nascida' : 'nascido';
+        const carrierText = client.gender === 'Feminino' ? 'portadora' : 'portador';
+
+        // Representation Logic
+        let representationText = "";
+        let minorTerm = "";
+
+        if (client.birth_date) {
+            const birth = new Date(client.birth_date);
+            const today = new Date();
+            let age = today.getFullYear() - birth.getFullYear();
+            const m = today.getMonth() - birth.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+                age--;
+            }
+
+            if (age < 18 && !client.is_emancipated) {
+                const repName = (client.legal_representative_name || '_______').toUpperCase();
+                const repCpf = (client.legal_representative_cpf || '_______');
+                representationText = `, neste ato representado(a) por seu/sua Representante Legal <strong>${repName}</strong>, CPF nº <strong>${repCpf}</strong>`;
+                minorTerm = ", menor impúbere";
+            }
+        }
+
         const lawyerText = selectedLawyers.map((lawyer) => {
             const nationality = lawyer.nationality || 'brasileiro(a)';
             const maritalStatus = lawyer.marital_status || 'casado(a)';
@@ -223,8 +366,8 @@ export function ClientsView() {
                 <h3 style="text-align: center; font-weight: bold; margin-bottom: 20px;">CONTRATO DE HONORÁRIOS ADVOCATÍCIOS</h3>
 
                 <p style="margin-bottom: 15px;">
-                    <strong>${client.name.toUpperCase()}</strong>, ${client.nationality || 'Brasileiro(a)'}, ${client.profession || 'Profissão'}, ${client.marital_status || 'Estado Civil'}, 
-                    CPF/CNPJ ${client.cpf || client.cnpj || 'CPF/CNPJ'}, residente e domiciliado na ${client.street || 'Rua'}, ${client.number || 'Nº'}, ${client.neighborhood || 'Bairro'}, ${client.city || 'Cidade'}-${client.state || 'UF'}, CEP ${client.zip || 'CEP'}, 
+                    <strong>${client.name.toUpperCase()}</strong>${minorTerm}, ${client.nationality || 'Brasileiro(a)'}, ${client.profession || 'Profissão'}, ${client.marital_status || 'Estado Civil'}, 
+                    ${bornText} em ${birthDate}, ${carrierText} do RG nº ${rgFull.trim()} e CPF/CNPJ ${client.cpf || client.cnpj || 'CPF/CNPJ'}, residente e domiciliado na ${client.street || 'Rua'}, ${client.number || 'Nº'}, ${client.neighborhood || 'Bairro'}, ${client.city || 'Cidade'}-${client.state || 'UF'}, CEP ${client.zip || 'CEP'}${representationText}, 
                     denominado simplesmente <strong>CONTRATANTE</strong>.
                 </p>
 
@@ -260,7 +403,7 @@ export function ClientsView() {
                 <p style="margin-bottom: 10px;">PARÁGRAFO TERCEIRO: Havendo acordo entre o CONTRATANTE e a parte contrária, não prejudicará o recebimento dos honorários contratados e da sucumbência. Caso em que os horários iniciais e finais serão pagos ao CONTRATADO.</p>
                 <p style="margin-bottom: 10px;">PARÁGRAGO QUARTO: DO ATRASO: As partes estabelecem que havendo atraso no pagamento dos honorários, serão cobrados juros de mora na proporção de 1% (um por cento) ao mês.</p>
                 <p style="margin-bottom: 10px;">
-                    PARÁGRAFO QUINTO: Para fins rescisórios, fica fixado o valor de <strong>${contractData.contractValue}</strong>.
+                    PARÁGRAFO QUINTO: Para fins rescisórios, fica fixado o valor de <strong>${contractData.contractValue} (${valorPorExtenso(contractData.contractValue)})</strong>.
                 </p>
 
                 <h4 style="margin-top: 15px; margin-bottom: 5px;">CLÁUSULA 4 - DESPESAS</h4>
@@ -268,7 +411,7 @@ export function ClientsView() {
                 <p style="margin-bottom: 10px;">PARÁGRAFO ÚNICO: RECIBOS: Todas as despesas serão acompanhadas de RECIBO, devidamente preparado e assinado pelo CONTRATADO.</p>
 
                 <h4 style="margin-top: 15px; margin-bottom: 5px;">CLÁUSULA 5 – RESCISÃO</h4>
-                <p style="margin-bottom: 10px;">O presente contrato terá validade enquanto perdurar o presente contrato, havendo desistência, dentro ou fora do processo, por quaisquer circunstâncias não determinadas pelo advogado, ou ainda, se lhe for cassado o mandato sem culpa do CONTRATADO, será devido os honorários integralmente, que poderá ser exigido imediatamente. O presente contrato terá validade enquanto perdurar o presente contrato, havendo desistência, dentro ou fora do processo, por quaisquer circunstâncias não determinadas pelo advogado, ou ainda, se lhe for cassado o mandato sem culpa do CONTRATADO, será devido os honorários integralmente, que poderá ser exigido imediatamente.</p>
+                <p style="margin-bottom: 10px;">O presente contrato terá validade enquanto perdurar o presente contrato, havendo desistência, dentro ou fora do processo, por quaisquer circunstâncias não determinadas pelo advogado, ou ainda, se lhe for cassado o mandato sem culpa do CONTRATADO, será devido os honorários integralmente, que poderá ser exigido imediatamente.</p>
 
                 <h4 style="margin-top: 15px; margin-bottom: 5px;">CLÁUSULA 6 – COBRANÇA</h4>
                 <p style="margin-bottom: 10px;">As partes acordam que facultará ao advogado contratado, o direito de realizar a cobrança dos honorários por todos os meios admitidos em direito, elegendo o foro da Comarca de Conceição do Araguaia, Estado do Pará, para dirimirem quaisquer dúvidas concernentes ao presente instrumento.</p>
@@ -290,7 +433,12 @@ export function ClientsView() {
             </div>
         `;
 
-        await saveAndOpenDocument(client, 'CONTRATO', `Contrato - ${client.name}`, htmlContent, contractData.serviceDetails);
+        const signers = [
+            { name: client.name, email: client.email, phone_number: client.phone, auth_mode: 'assinaturaTela', require_selfie: true },
+            ...selectedLawyers.map(l => ({ name: l.name, email: l.email, phone_number: l.phone }))
+        ];
+
+        await saveAndOpenDocument(client, 'CONTRATO', `Contrato - ${client.name}`, htmlContent, contractData.serviceDetails, signers);
     };
 
     const filteredClients = clients.filter(c =>
@@ -358,7 +506,29 @@ export function ClientsView() {
                                                     {client.name.charAt(0).toUpperCase()}
                                                 </div>
                                                 <div>
-                                                    <div>{client.name}</div>
+                                                    <div className="flex items-center gap-2">
+                                                        {client.name}
+                                                        <CopyButton text={client.name} title="Copiar Nome" />
+                                                        {(() => {
+                                                            if (client.birth_date) {
+                                                                const birth = new Date(client.birth_date);
+                                                                const today = new Date();
+                                                                let age = today.getFullYear() - birth.getFullYear();
+                                                                const m = today.getMonth() - birth.getMonth();
+                                                                if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+                                                                    age--;
+                                                                }
+                                                                if (age < 18) {
+                                                                    return (
+                                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 border border-amber-200">
+                                                                            MENOR
+                                                                        </span>
+                                                                    );
+                                                                }
+                                                            }
+                                                            return null;
+                                                        })()}
+                                                    </div>
                                                     <div className="text-xs text-muted-foreground font-normal">{client.profession}</div>
                                                 </div>
                                             </div>
@@ -366,24 +536,39 @@ export function ClientsView() {
                                         <td className="px-6 py-4">
                                             <div className="flex flex-col gap-1 text-xs">
                                                 {client.email && (
-                                                    <div className="flex items-center gap-2 text-muted-foreground hover:text-foreground">
+                                                    <div className="flex items-center gap-2 text-muted-foreground hover:text-foreground group">
                                                         <Mail size={12} /> {client.email}
+                                                        <CopyButton text={client.email} title="Copiar Email" />
                                                     </div>
                                                 )}
                                                 {client.phone && (
                                                     <div className="flex items-center gap-2 text-muted-foreground hover:text-foreground">
                                                         <Phone size={12} /> {client.phone}
+                                                        <CopyButton text={client.phone} title="Copiar Telefone" />
                                                     </div>
                                                 )}
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 text-muted-foreground">
-                                            {client.cpf || client.rg || '-'}
+                                            <div className="flex flex-col gap-1">
+                                                <div className="flex items-center gap-2 text-sm text-foreground">
+                                                    {client.cpf || client.rg || '-'}
+                                                    {(client.cpf || client.rg) && <CopyButton text={client.cpf || client.rg} title="Copiar Documento" />}
+                                                </div>
+                                                {client.birth_date && (
+                                                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                                        <Calendar size={10} />
+                                                        {formatDate(client.birth_date)}
+                                                        <CopyButton text={formatDate(client.birth_date)} title="Copiar Data de Nasc." />
+                                                    </div>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="px-6 py-4 text-muted-foreground">
                                             <div className="flex items-center gap-2">
-                                                <MapPin size={12} />
-                                                <span className="truncate max-w-[200px]">{client.address || '-'}</span>
+                                                <MapPin size={12} className="shrink-0" />
+                                                <span className="truncate max-w-[200px]" title={getFullAddress(client)}>{getFullAddress(client)}</span>
+                                                {getFullAddress(client) !== '-' && <CopyButton text={getFullAddress(client)} title="Copiar Endereço" />}
                                             </div>
                                         </td>
                                         <td className="px-6 py-4">
@@ -443,6 +628,12 @@ export function ClientsView() {
                 isOpen={isHistoryModalOpen}
                 onClose={() => setIsHistoryModalOpen(false)}
                 client={clientForHistory}
+            />
+
+            <ZapSignModal
+                isOpen={isZapModalOpen}
+                onClose={() => setIsZapModalOpen(false)}
+                docData={zapDocData}
             />
         </div>
     );

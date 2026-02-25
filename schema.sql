@@ -29,7 +29,14 @@ CREATE TABLE IF NOT EXISTS clients (
     neighborhood TEXT, 
     city TEXT, 
     state TEXT, 
-    zip TEXT
+    zip TEXT,
+    rg_issuer TEXT,
+    rg_uf TEXT,
+    birth_date TEXT,
+    gender TEXT,
+    legal_representative_name TEXT,
+    legal_representative_cpf TEXT,
+    is_emancipated INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -104,16 +111,19 @@ CREATE TABLE IF NOT EXISTS client_documents (
     external_id TEXT, 
     signer_link TEXT, 
     status TEXT DEFAULT 'created', 
-    description TEXT
+    description TEXT,
+    signers_data TEXT,
+    folder TEXT
 );
 
 CREATE TABLE IF NOT EXISTS deal_files (
     id SERIAL PRIMARY KEY, 
     deal_id INTEGER REFERENCES deals(id), 
-    filename TEXT, 
-    path TEXT, 
+    file_name TEXT, 
+    file_path TEXT, 
     uploaded_by INTEGER REFERENCES users(id), 
-    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uploaded_by_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS publications (
@@ -126,20 +136,3 @@ CREATE TABLE IF NOT EXISTS publications (
     status TEXT DEFAULT 'new', 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
--- 5. DADOS INICIAIS (SEED) --
-
--- Inserir Pipeline Padrão
-INSERT INTO pipelines (name) VALUES ('Pipeline Padrão');
-
--- Inserir Estágios (pegando o ID do ultimo pipeline criado, que deve ser 1)
-INSERT INTO stages (pipeline_id, name, "order") VALUES 
-(1, 'Nova Atividade', 0),
-(1, 'Em Execução', 1),
-(1, 'Aguardando Cliente', 2),
-(1, 'Aguardando Ajuizamento', 3),
-(1, 'Concluído', 4);
-
--- Inserir Usuário Admin (Senha: 123456)
-INSERT INTO users (name, email, login, role, password)
-VALUES ('Admin', 'admin@law.com', 'admin', 'admin', '$2a$10$wOq2c.y8xJ1.Z6.Z6.Z6.u7kZ9.Z6.Z6.Z6.Z6.Z6');

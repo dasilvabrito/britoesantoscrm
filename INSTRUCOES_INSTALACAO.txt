@@ -1,0 +1,40 @@
+=== GUIA DE INSTALAÇÃO NO SERVIDOR (Windows Server 2022) ===
+
+PASSO 1: Preparar o Servidor
+1. Acesse o servidor (192.168.1.15).
+2. Baixe e instale o Node.js (Versão LTS): https://nodejs.org/
+3. Durante a instalação, marque a opção para instalar ferramentas nativas (opcional, mas recomendado).
+
+PASSO 2: Copiar os Arquivos
+1. Copie a pasta inteira "antigravity" do seu computador.
+2. Cole no Servidor (Exemplo: em C:\Sistemas\antigravity).
+
+PASSO 3: Configurar e Rodar
+1. Abra o PowerShell no servidor como ADMINISTRADOR.
+2. Entre na pasta do sistema:
+   cd C:\Sistemas\antigravity
+
+3. Instale o Gerenciador de Processos (PM2):
+   npm install -g pm2
+
+4. Instale as dependências do projeto (caso não tenham ido na cópia):
+   npm install
+   cd client
+   npm install
+   cd ..
+
+5. Inicie o sistema:
+   pm2 start ecosystem.config.js
+
+6. Salve para iniciar com o Windows:
+   pm2 save
+   pm2 startup
+
+PASSO 4: Testar
+- Abra o navegador no servidor e digite: http://localhost
+- De outros computadores, digite: http://192.168.1.15
+
+---
+Login: wililan
+Senha: 123456
+---

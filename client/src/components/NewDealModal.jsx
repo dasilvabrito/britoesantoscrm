@@ -144,10 +144,18 @@ export function NewDealModal({ isOpen, onClose, stages, onDealCreated, currentUs
                                 value={formData.client_id}
                                 onChange={e => {
                                     const id = e.target.value;
-                                    setFormData({
-                                        ...formData,
-                                        client_id: id,
-                                        client_name: id ? clients.find(c => c.id == id)?.name : ''
+                                    setFormData(prev => {
+                                        const client = clients.find(c => c.id == id);
+                                        const cleanName = client ? client.name.replace(/[^a-zA-Z0-9]/g, '') : '';
+                                        // Default to Network Share path requested by user: \\WILLIAN\antigravity
+                                        const defaultPath = client ? `\\\\WILLIAN\\antigravity\\uploads\\clients\\${cleanName}` : '';
+
+                                        return {
+                                            ...prev,
+                                            client_id: id,
+                                            client_name: client ? client.name : '',
+                                            folder_path: defaultPath // Auto-fill network path
+                                        };
                                     });
                                 }}
                                 required
@@ -213,7 +221,7 @@ export function NewDealModal({ isOpen, onClose, stages, onDealCreated, currentUs
                         <input
                             required
                             className="w-full h-10 px-3 rounded-md border border-input bg-background/50 focus:outline-none focus:ring-2 focus:ring-ring font-mono text-xs"
-                            placeholder="C:/Arquivos/Clientes/NomeCliente"
+                            placeholder="\\\\WILLIAN\\antigravity\\uploads\\clients\\NomeCliente"
                             value={formData.folder_path}
                             onChange={e => setFormData({ ...formData, folder_path: e.target.value })}
                         />
