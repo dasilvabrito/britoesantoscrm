@@ -1,0 +1,79 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Cliente {
+  id                Int      @id @default(autoincrement())
+  nome              String
+  cpf               String   @unique
+  rendaLiquida      Decimal?
+  numeroDependentes Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  gastos     GastoEssencial[]
+  dividas    Divida[]
+  planos     PlanoPagamento[]
+  simulacoes Simulation[]
+}
+
+model GastoEssencial {
+  id        Int     @id @default(autoincrement())
+  clienteId Int
+  tipo      String // MORADIA, ALIMENTACAO, etc.
+  valor     Decimal
+  descricao String?
+
+  cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+}
+
+model Divida {
+  id                Int      @id @default(autoincrement())
+  clienteId         Int
+  credor            String
+  tipo              String // CONSIGNADO, CARTAO, etc.
+  numeroContrato    String?
+  valorContratado   Decimal?
+  valorPago         Decimal?
+  saldoAtual        Decimal
+  taxaJurosMensal   Decimal?
+  taxaMediaMercado  Decimal?
+  cet               Decimal?
+  parcelasRestantes Int?
+
+  cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+}
+
+model PlanoPagamento {
+  id                     Int      @id @default(autoincrement())
+  clienteId              Int
+  prazoMeses             Int
+  capacidadeMensal       Decimal
+  totalDividaConsolidada Decimal
+  valorParcelaMensal     Decimal
+  descontoGlobal         Decimal?
+  carenciaDias           Int?
+  dataCriacao            DateTime @default(now())
+
+  cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+}
+
+model Simulation {
+  id         Int      @id @default(autoincrement())
+  clienteId  Int?
+  type       String // JUDICIAL_UPDATE, BANK_REVISION, LABOR, etc.
+  inputData  String // Parâmetros de entrada (JSON as string)
+  resultData String // Resultados calculados (JSON as string)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  cliente Cliente? @relation(fields: [clienteId], references: [id])
+}

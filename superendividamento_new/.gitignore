@@ -1,0 +1,32 @@
+# Next.js
+.next/
+out/
+build/
+
+# Production
+.env
+.env.local
+.env.production
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Database
+prisma/dev.db
+prisma/dev.db-journal
+
+# Dependencies
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Vercel
+.vercel
